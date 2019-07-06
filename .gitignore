@@ -1,0 +1,9 @@
+/ignore/
+/Model/
+/Data/
+#/.ipynb/
+/.vscode/
+/flyer-bot-bp/
+*.csv
+*.dat
+log
