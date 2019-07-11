@@ -177,7 +177,7 @@ class Trade:
                     print('order size ' + str(size) + ' is too small. minimum order size is 0.01!')
                     LineNotification.send_error('order size ' + str(size) + ' is too small. minimum order size is 0.01!')
                     LogMaster.add_log('order size ' + str(size) + ' is too small. minimum order size is 0.01!',0,None)
-                    return order_id
+                    return order_id['info']['child_order_acceptance_id']
                 else:
                     print('order size =0 is not valid!')
                     LineNotification.send_error('order size =0 is not valid!')
@@ -685,6 +685,7 @@ class Trade:
                     checked_exec_id.append(exec['id'])
             return exec_size, exec_price
 
+        order_id = ''
         try:
             entry_price = TickData.get_bid_price() + 1 if side == 'buy' else TickData.get_ask_price() - 1
             cls.num_private_access += 1
@@ -695,7 +696,7 @@ class Trade:
                 price=entry_price,
                 amount=total_size,
                 params={'product_code': 'FX_BTC_JPY', 'minute_to_expire': 1}  # 期限切れまでの時間（分）（省略した場合は30日）
-            )
+            )['info']['child_order_acceptance_id']
         except Exception as e:
             print('opt entry limit order failed! ' + str(e))
             LogMaster.add_log('opt entry limit order failed! ' + str(e), 0, None)
@@ -705,22 +706,26 @@ class Trade:
 
         exec_size = []
         exec_price = []
+        print('oid=',order_id)
         while datetime.now().second <50 and sum(exec_size) < total_size:
             es, ep = __check_execution_ws(order_id)
             exec_size.extend(es)
             exec_price.extend(ep)
-            print('size=',sum(exec_size))
             time.sleep(0.5)
-        if 
         cls.cancel_order(order_id)
         if sum(exec_size) < total_size: #final check using execution history from API
             es, ep = __check_execution(order_id)
             if sum(es) > sum(exec_size):
                 exec_size = es
                 exec_price = ep
-        ave_p = round(sum(exec_price[i] * exec_size[i] for i in range(len(exec_price))) / sum(exec_size))
-        print('opt entry limit order has been successfully executed.' + 'side=' + side + ', ave price=' + str(ave_p) + ', size=' + str(round(sum(exec_size), 2)))
-        return 0, round(sum(exec_size), 2), ave_p, order_id
+        if sum(exec_size) >0:
+            ave_p = round(sum(exec_price[i] * exec_size[i] for i in range(len(exec_price))) / sum(exec_size))
+            print('opt entry limit order has been successfully executed.' + 'side=' + side + ', ave price=' + str(ave_p) + ', size=' + str(round(sum(exec_size), 2)))
+            return 0, round(sum(exec_size), 2), ave_p, order_id
+        else:
+            ave_p = 0
+            print('opt entry limit order timed out.' + 'side=' + side + ', ave price=0'+', size=0')
+            return 0, 0, 0, order_id
 
 
     '''
@@ -969,10 +974,8 @@ if __name__ == '__main__':
     LogMaster.initialize()
     Trade.initialize()
     s = time.time()
-    #print(Trade.opt_entry_limit_order('buy', 0.05))
-    oid = Trade.order('buy', 1000000, 0.05, 'limit', 1)
-    time.sleep(2)
-    Trade.cancel_order(oid)
+    print(Trade.opt_entry_limit_order('buy', 0.05))
+    print('done')
     #executions =Trade.get_executions()
     ##print(executions)
     #print(len(executions))
