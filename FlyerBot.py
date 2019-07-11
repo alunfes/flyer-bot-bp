@@ -14,7 +14,7 @@ import math
 
 
 '''
-all order should be used wait till boarded or execution
+
 '''
 class FlyerBot:
     def __init__(self):
@@ -56,7 +56,7 @@ class FlyerBot:
             if res == 0:
                 print(side+' entry market order has been executed.'+'price='+str(price)+', size='+str(size))
                 self.ac.update_holding(side,price,size,order_id)
-                #self.ac.sync_position_order()
+                self.ac.sync_position_order()
                 self.ac.calc_collateral_change()
                 self.ac.calc_pl(TickData.get_ltp())
                 self.ac.add_order_exec_price_gap(price,ltp,side)
@@ -285,6 +285,6 @@ if __name__ == '__main__':
     LogMaster.initialize()
     Trade.initialize()
     fb = FlyerBot()
-    fb.start_flyer_bot(100,10,10000,2000,0.7,0.6) #num_term, window_term, pl, ls, upper_kijun, lower_kijun)
+    fb.start_flyer_bot(150,3,9000,2000,0.7,0.6) #num_term, window_term, pl, ls, upper_kijun, lower_kijun)
     #'JRF20190526-142616-930215'
     #JRF20190526-143431-187560

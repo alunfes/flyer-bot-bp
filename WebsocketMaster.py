@@ -150,9 +150,17 @@ class TickData:
         else:
             return None
 
+    '''
+    [{'id': 1046951795, 'side': 'SELL', 'price': 654622, 'size': 0.1, 'exec_date': '2019-05-07T12:03:23.1848477Z', 
+    'buy_child_order_acceptance_id': 'JRF20190507-120321-516068', 'sell_child_order_acceptance_id': 'JRF20190507-120323-681291'}]
+    '''
     @classmethod
     def get_exe_data(cls):
         return cls.exec_data[:]
+
+    @classmethod
+    def get_exec_ws_status(cls):
+        return cls.ws_execution.is_connected()
 
 
     @classmethod
@@ -265,7 +273,7 @@ if __name__ == '__main__':
     TickData.initialize()
     while True:
         time.sleep(1)
-        print(TickData.get_sfd())
+        print(TickData.get_exec_ws_status())
         #if omd is not None:
             #print('dt={},ut={},open={},high={},low={},close={}'.format(omd.dt,omd.unix_time,omd.open,omd.high,omd.low,omd.close))
         #print(str(TickData.get_ltp()))
