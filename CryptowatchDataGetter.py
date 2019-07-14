@@ -55,10 +55,10 @@ class CryptowatchDataGetter:
         while flg_down_success == False:
             try:
                 num_down += 1
-                result = cls.get_data_from_crptowatch(after=int(round(target_ut)))
+                result = cls.get_data_from_crptowatch(after=int(target_ut))
                 if len(result) > 0:
                     omd = cls.convert_json_to_ohlc(result)
-                    if len(omd.unix_time) > 0 and target_ut in omd.unix_time:
+                    if len(omd.unix_time) > 0:# and int(target_ut) in omd.unix_time:
                         flg_down_success = True
                         return 0, omd
                     else:
@@ -185,6 +185,7 @@ class CryptowatchDataGetter:
 
 
 if __name__ == '__main__':
+
     start = time.time()
     CryptowatchDataGetter.get_and_add_to_csv()
     elapsed_time = time.time() - start

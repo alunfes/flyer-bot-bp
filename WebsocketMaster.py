@@ -96,6 +96,7 @@ class TickData:
         cls.ticker_lock = threading.Lock()
         cls.ohlc_lock = threading.Lock()
         cls.btc_lock = threading.Lock()
+        cls.ws_down_flg = False
         cls.ltp = []
         cls.exec_data = []
         cls.ticker_data = []
@@ -185,7 +186,7 @@ class TickData:
             cls.__check_thread_status()
             cls.__send_notification()
             #cls.__calc_std(list([d.get('ltp') for d in cls.ticker_data]))
-            time.sleep(10)
+            time.sleep(1)
 
     @classmethod
     def __send_notification(cls):
@@ -233,6 +234,7 @@ class TickData:
     def __check_thread_status(cls):
         if cls.ws_execution.is_connected == False:
             cls.ws_execution.connect()
+            cls.ws_down_flg = True
         if cls.ws_ticker.is_connected == False:
             cls.ws_ticker.connect()
 

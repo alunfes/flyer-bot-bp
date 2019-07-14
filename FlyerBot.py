@@ -14,7 +14,7 @@ import math
 
 
 '''
-
+wsは結構頻繁に落ちるのでone min dataをcrytowatchからのデータで再更新するようにする。  
 '''
 class FlyerBot:
     def __init__(self):
@@ -34,70 +34,46 @@ class FlyerBot:
         self.prediction = 0
         self.pred_side = ''
 
-    def cancel_order(self):
-        print('cancel order')
-        status = Trade.cancel_and_wait_completion(self.ac.order_id)
-        if len(status) > 0:
-            print('cancel failed, partially executed')
-            oid = Trade.order(status['side'].lower(),0,status['executed_size'],'market',1)
-            LogMaster.add_log('action_message - cancel order - cancel failed and partially executed. closed position.',self.prediction, self.ac)
-            self.ac.initialize_order()
-        else:
-            LogMaster.add_log('action_message - cancelled order',self.prediction, self.ac)
-            self.ac.initialize_order()
+    #cancellation shoud be used only for pt order
+    def cancel_pt_order(self):
+        if self.ac.pt_order_id !='':
+            print('cancel order')
+            status = Trade.cancel_and_wait_completion(self.ac.pt_order_id)
+            if len(status) > 0:
+                print('pt cancel failed, partially executed')
+                oid = Trade.order(status['side'].lower(),0,status['executed_size'],'market',1)
+                LogMaster.add_log('action_message - cancel pt order - cancel pt failed and partially executed. closed position.',self.prediction, self.ac)
+                self.ac.initialize_order()
+            else:
+                LogMaster.add_log('action_message - cancelled order',self.prediction, self.ac)
+                self.ac.initialize_order()
 
 
-
-    def entry_market_order(self, side, size):
-        if self.ac.order_side == '':
-            self.ac.update_order(side,0,0,size,'',10,'')
+    def entry_limit_order(self, side, size):
             ltp = TickData.get_ltp()
-            res, size, price, order_id = Trade.market_order_wait_till_execution3(side, size)
+            res, size, price, order_id = Trade.opt_entry_limit_order(side, size)
             if res == 0:
-                print(side+' entry market order has been executed.'+'price='+str(price)+', size='+str(size))
+                print(side+' entry limit order has been executed.'+'price='+str(price)+', size='+str(size))
                 self.ac.update_holding(side,price,size,order_id)
-                self.ac.sync_position_order()
-                self.ac.calc_collateral_change()
-                self.ac.calc_pl(TickData.get_ltp())
+                #self.ac.calc_pl(side, size, price)
                 self.ac.add_order_exec_price_gap(price,ltp,side)
                 print('holding_side={},holding_price={},holding_size={},total_pl={},collateral={},collateral_change={},realized_pl={}'.
                       format(self.ac.holding_side,self.ac.holding_price,self.ac.holding_size,self.ac.total_pl,self.ac.collateral,self.ac.collateral_change,self.ac.realized_pl))
-                LogMaster.add_log('Market order entry has been executed. ' + ' side=' + side + ' size=' + str(size)+ ' price=' + str(price), self.prediction,self.ac)
-
+                LogMaster.add_log('Limit order entry has been executed. ' + ' side=' + side + ' size=' + str(size)+ ' price=' + str(price), self.prediction,self.ac)
             else:
-                LogMaster.add_log('Market order has been failed.'+' side='+side +' '+str(size),self.prediction, self.ac)
+                LogMaster.add_log('Limit order has been failed.'+' side='+side +' '+str(size),self.prediction, self.ac)
                 print('market order failed!')
             self.ac.initialize_order()
-        else:
-            print('Entry market order - order is already exitst!')
-            LogMaster.add_log('Entry market order - order is already exitst!', self.prediction, self.ac)
 
 
-    def entry_limit_order(self,side, price, size, expire):
-        if self.ac.order_side == '':
-            print('entry limit order')
-            oid = Trade.order_wait_till_boarding(side,price,size,expire)
-            if len(oid) > 10:
-                self.ac.update_order(side, price, 0, size,oid,1,'new entry')
-                LogMaster.add_log('Entry limit order. ' + ' side=' + side + ' size=' + str(size) + ' price=' + str(price), self.prediction,self.ac)
-                print('Entry limit order. ' + ' side=' + side + ' size=' + str(size) + ' price=' + str(price))
-            else:
-                LogMaster.add_log('Limit order has been failed.' + ' side=' + side + ' ' + str(size),self.prediction, self.ac)
-                print('limit order failed!')
-        else:
-            print('Entry limit order - order is already exitst!')
-            LogMaster.add_log('Entry limit order - order is already exitst!', self.ac)
-
-
-
-    def entry_pl_order(self):
+    def entry_pt_order(self):
         side = 'buy' if self.ac.holding_side == 'sell' else 'sell'
         price = self.ac.holding_price + self.pl if self.ac.holding_side == 'buy' else self.ac.holding_price - self.pl
         res = Trade.order(side, price, self.ac.holding_size, 'limit', 1440)
         if len(res) > 10:
-            self.ac.update_order(side,price,0,self.ac.holding_size,res,1440,'pl order')
-            print('pl order: side = {}, price = {}, outstanding size = {}'.format(self.ac.order_side, self.ac.order_price, self.ac.order_outstanding_size))
-            LogMaster.add_log('action_message - pl entry for ' + side + ' @' + str(price) + ' x' + str(self.ac.order_outstanding_size), self.prediction,self.ac)
+            self.ac.set_pt_order(res, side, self.ac.holding_size, price)
+            print('pl order: side = {}, price = {}, outstanding size = {}'.format(self.ac.pt_side, self.ac.pt_price, self.ac.pt_outstanding_size))
+            LogMaster.add_log('action_message - pl entry for ' + side + ' @' + str(price) + ' x' + str(self.ac.pt_outstanding_size), self.prediction,self.ac)
         else:
             LogMaster.add_log('action_message - failed pl entry!',self.prediction,self.ac)
             print('failed pl order!')
@@ -105,60 +81,43 @@ class FlyerBot:
     def exit_order(self):
         if self.ac.holding_side != '':
             print('quick exit order')
-            status = Trade.market_order_wait_till_execution('buy' if self.ac.holding_side == 'sell' else 'sell',self.ac.holding_size)
-            if status is not None:
-                if status['child_order_state'] == 'COMPLETED':
-                    self.ac.initialize_holding()
-                    print('exit order completed!')
-                    LogMaster.add_log('exit order completed!',self.prediction,self.ac)
-                    return 0
-                else:
-                    print('something wrong in exit order! '+str(status))
-                    LogMaster.add_log('something wrong in exit order! '+str(status), self.prediction, self.ac)
-                    return -1
+            side = 'buy' if self.ac.holding_side == 'sell' else 'sell'
+            ltp = TickData.get_ltp()
+            res, size, price, order_id = Trade.price_tracing_order(side, self.ac.holding_size) #return 0, round(sum(exec_size), 2), ave_p, order_id
+            if res == 0:
+                print(side+' exit price tracing order has been executed.' + 'price=' + str(price) + ', size=' + str(size))
+                self.ac.update_holding(side, price, size, order_id)
+                self.ac.calc_pl(side, size, price)
+                self.ac.add_order_exec_price_gap(price, ltp, side)
+                LogMaster.add_log('exit order completed!', self.prediction, self.ac)
+                return 0
             else:
-                print('something wrong in exit order! '+str(status))
-                LogMaster.add_log('something wrong in exit order! '+str(status), self.prediction, self.ac)
+                print(side + ' exit price tracing order has been failed.' + 'price=' + str(price) + ', size=' + str(size))
+                self.ac.update_holding(side, price, size, order_id)
+                self.ac.calc_pl(side, size, price)
+                self.ac.add_order_exec_price_gap(price, ltp, side)
+                LogMaster.add_log('exit order failed!', self.prediction, self.ac)
                 return -1
-
-    def check_pl(self):
-        if self.ac.holding_side =='buy' and TickData.get_ltp() - self.ac.holding_price >= self.pl:
-            return True
-        elif self.ac.holding_side =='sell' and self.ac.holding_price - TickData.get_ltp() >= self.pl:
-            return True
-        else:
-            return False
-
-    def check_ls(self):
-        if self.ac.holding_side =='buy' and self.ac.holding_price - TickData.get_ltp() >= self.ls:
-            return True
-        elif self.ac.holding_side =='sell' and  TickData.get_ltp() - self.ac.holding_price >= self.ls:
-            return True
-        else:
-            return False
 
 
 
     def start_flyer_bot(self, num_term, window_term, pl, ls, upper_kijun, lower_kijun):
         self.__bot_initializer(num_term, window_term, pl, ls, upper_kijun, lower_kijun)
         self.start_time = time.time()
-        self.fixed_order_size = 0.05
+        self.fixed_order_size = 0.1
         while SystemFlg.get_system_flg():
             self.__check_system_maintenance(num_term, window_term)
             self.__update_ohlc()
             if self.ac.holding_side == '' and self.ac.order_side == '': #no position no order
                 if self.prediction == 1 or self.prediction == -1:
-                    self.entry_market_order(self.pred_side, self.fixed_order_size)
-            elif self.ac.holding_side != '' and self.ac.order_side == '': #holding position and no order
-                if self.check_pl():
-                    self.entry_market_order('buy' if self.ac.holding_side=='sell' else 'sell', self.ac.holding_size)
-                if self.check_ls():
-                    self.entry_market_order('buy' if self.ac.holding_side == 'sell' else 'sell', self.ac.holding_size)
+                    self.entry_limit_order(self.pred_side, self.fixed_order_size)
+            elif self.ac.holding_side != '' and self.ac.pt_side == '': #holding position and no order
+                self.entry_pt_order()
             elif (self.ac.holding_side == 'buy' and (self.prediction == 2)) or (self.ac.holding_side == 'sell' and (self.prediction[0] == 1)):  # ポジションが判定と逆の時にexit,　もしplがあればキャンセル。。
-                if self.ac.order_status != '':
-                    self.cancel_order() #最初にキャンセルしないとexit order出せない。
-                self.entry_market_order(self.pred_side, self.ac.holding_size)
-                self.entry_market_order(self.pred_side, self.fixed_order_size)
+                self.cancel_pt_order()
+                self.exit_order()
+                self.entry_limit_order(self.pred_side, self.fixed_order_size)
+
             if Trade.flg_api_limit:
                 time.sleep(60)
                 print('Bot sleeping for 60sec due to API access limitation')
@@ -168,6 +127,8 @@ class FlyerBot:
 
     def __bot_initializer(self, num_term, window_term, pl, ls, upper_kijun, lower_kijun):
         Trade.cancel_all_orders()
+        self.num_term = num_term
+        self.window_term = window_term
         self.pl = pl
         self.ls = ls
         self.upper_kijun = upper_kijun
@@ -197,6 +158,13 @@ class FlyerBot:
             LineNotification.send_error('resumed from maintenance time sleep')
             print('resumed from maintenance time sleep')
 
+    '''
+    wsのone min dataはwsが落ちた時など正確性に欠けるので、cryptowatchのデータを定期的に取得する。
+    '''
+    def __overwrite_one_min_data(self, num_term, window_term):
+        CryptowatchDataGetter.get_and_add_to_csv()
+        OneMinMarketData.initialize_for_bot(num_term, window_term)
+
 
     def __update_ohlc(self): #should download ohlc soon after when it finalized
         if self.last_ohlc_min < datetime.now(self.JST).minute or (self.last_ohlc_min == 59 and datetime.now(self.JST).minute == 0):
@@ -204,32 +172,37 @@ class FlyerBot:
             num_conti = 0
             num_max_trial = 10
             time.sleep(1)
-            omd = TickData.get_ohlc()
-            if omd is not None:
-                for i in range(len(omd.unix_time)):
-                    if OneMinMarketData.ohlc.unix_time[-1] < omd.unix_time[i]:
-                        OneMinMarketData.ohlc.add_and_pop(omd.unix_time[i], omd.dt[i], omd.open[i], omd.high[i],omd.low[i], omd.close[i], omd.size[i])
-                        flg = False
-                LogMaster.add_log('updated ws ohlc at ' + str(datetime.now(self.JST)), self.prediction, self.ac)
+            if TickData.ws_down_flg==False:
+                omd = TickData.get_ohlc()
+                if omd is not None:
+                    for i in range(len(omd.unix_time)):
+                        if OneMinMarketData.ohlc.unix_time[-1] < omd.unix_time[i]:
+                            OneMinMarketData.ohlc.add_and_pop(omd.unix_time[i], omd.dt[i], omd.open[i], omd.high[i],omd.low[i], omd.close[i], omd.size[i])
+                            flg = False
+                    LogMaster.add_log('updated ws ohlc at ' + str(datetime.now(self.JST)), self.prediction, self.ac)
+                else:
+                    while flg:
+                        res, omd = CryptowatchDataGetter.get_data_after_specific_ut(OneMinMarketData.ohlc.unix_time[-1])
+                        if res == 0 and omd is not None:
+                            if len(omd.unix_time) > 0:
+                                omd.cut_data(len(omd.unix_time)) #remove first data to exclude after ut
+                                for i in range(len(omd.unix_time)):
+                                    if OneMinMarketData.ohlc.unix_time[-1] < omd.unix_time[i]:
+                                        OneMinMarketData.ohlc.add_and_pop(omd.unix_time[i], omd.dt[i], omd.open[i], omd.high[i], omd.low[i],omd.close[i], omd.size[i])
+                                        flg = False
+                                if flg == False:
+                                    print('data download dt='+str(datetime.now(self.JST)))
+                                    LogMaster.add_log('updated ohlc at '+str(datetime.now(self.JST)), self.prediction, self.ac)
+                        num_conti += 1
+                        time.sleep(1)
+                        if num_conti >= num_max_trial:
+                            print('data can not be downloaded from cryptowatch.')
+                            LogMaster.add_log('ohlc download error', self.prediction, self.ac)
+                            break
             else:
-                while flg:
-                    res, omd = CryptowatchDataGetter.get_data_after_specific_ut(OneMinMarketData.ohlc.unix_time[-1])
-                    if res == 0 and omd is not None:
-                        if len(omd.unix_time) > 0:
-                            omd.cut_data(len(omd.unix_time)) #remove first data to exclude after ut
-                            for i in range(len(omd.unix_time)):
-                                if OneMinMarketData.ohlc.unix_time[-1] < omd.unix_time[i]:
-                                    OneMinMarketData.ohlc.add_and_pop(omd.unix_time[i], omd.dt[i], omd.open[i], omd.high[i], omd.low[i],omd.close[i], omd.size[i])
-                                    flg = False
-                            if flg == False:
-                                print('data download dt='+str(datetime.now(self.JST)))
-                                LogMaster.add_log('updated ohlc at '+str(datetime.now(self.JST)), self.prediction, self.ac)
-                    num_conti += 1
-                    time.sleep(1)
-                    if num_conti >= num_max_trial:
-                        print('data can not be downloaded from cryptowatch.')
-                        LogMaster.add_log('ohlc download error', self.prediction, self.ac)
-                        break
+                TickData.ws_down_flg = False
+                self.__overwrite_one_min_data(self.num_term, self.window_term)
+                LogMaster.add_log('overwrite one min data', self.prediction, self.ac)
             if flg == False:
                 self.last_ohlc_min = datetime.now(self.JST).minute
                 OneMinMarketData.update_for_bot()
@@ -251,31 +224,6 @@ class FlyerBot:
             LogMaster.add_log('private access per 300sec = '+str(Trade.total_access_per_300s), self.prediction, self.ac)
             LineNotification.send_notification(LogMaster.get_latest_performance())
 
-    #def __sync_order_poisition(self):
-    #    self.ac.sync_position_order()
-
-
-    def calc_opt_size(self):
-        collateral = Trade.get_collateral()['collateral']
-        if TickData.get_1m_std() > 10000:
-            multiplier = 0.5
-            print('changed opt size multiplier to 0.5')
-            LogMaster.add_log('action_message - changed opt size multiplier to 0.5',self.prediction[0],self.ac)
-            LineNotification.send_error('changed opt size multiplier to 0.5')
-        else:
-            multiplier = 1.5
-        size = round((multiplier * collateral * self.margin_rate) / TickData.get_ltp() * 1.0 / self.leverage, 2)
-        return size
-
-    def calc_opt_pl(self):
-        if TickData.get_1m_std() > 10000:
-            newpl = self.pl * math.log((TickData.get_1m_std() / 100000)) + 5
-            print('changed opt pl kijun to '+str(newpl))
-            LogMaster.add_log('action_message - changed opt pl kijun to '+str(newpl),self.prediction[0],self.ac)
-            LineNotification.send_error('changed opt pl kijun to '+str(newpl))
-            return newpl
-        else:
-            return self.pl
 
 
 if __name__ == '__main__':
@@ -285,6 +233,6 @@ if __name__ == '__main__':
     LogMaster.initialize()
     Trade.initialize()
     fb = FlyerBot()
-    fb.start_flyer_bot(150,3,9000,2000,0.7,0.6) #num_term, window_term, pl, ls, upper_kijun, lower_kijun)
+    fb.start_flyer_bot(50,10,6000,1000,0.7,0.4) #num_term, window_term, pl, ls, upper_kijun, lower_kijun)
     #'JRF20190526-142616-930215'
     #JRF20190526-143431-187560

@@ -721,7 +721,7 @@ class Trade:
         if sum(exec_size) >0:
             ave_p = round(sum(exec_price[i] * exec_size[i] for i in range(len(exec_price))) / sum(exec_size))
             print('opt entry limit order has been successfully executed.' + 'side=' + side + ', ave price=' + str(ave_p) + ', size=' + str(round(sum(exec_size), 2)))
-            return 0, round(sum(exec_size), 2), ave_p, order_id
+            return round(sum(exec_size), 2), ave_p, order_id
         else:
             ave_p = 0
             print('opt entry limit order timed out.' + 'side=' + side + ', ave price=0'+', size=0')
@@ -740,8 +740,22 @@ class Trade:
             else:
                 bid = TickData.get_bid_price()
                 return False if ori_bidask - bid >= diff_kijun else True
+
+        checked_exec_id = []
+        def __check_execution_ws(order_id):
+            exec_size = []
+            exec_price = []
+            exe_data = TickData.get_exe_data()[-30:]
+            for exec in exe_data:
+                if exec[side + '_child_order_acceptance_id'] == order_id and exec['id'] not in checked_exec_id:
+                    exec_size.append(exec['size'])
+                    exec_price.append(exec['price'])
+                    checked_exec_id.append(exec['id'])
+            return exec_size, exec_price
+
         exec_size = []
         exec_price = []
+        order_ids = []
         while sum(exec_size) < total_size:
             try:
                 entry_price = TickData.get_bid_price() + 1 if side == 'buy' else TickData.get_ask_price() - 1
@@ -753,15 +767,27 @@ class Trade:
                     price=entry_price,
                     amount=total_size,
                     params={'product_code': 'FX_BTC_JPY', 'minute_to_expire': 1}  # 期限切れまでの時間（分）（省略した場合は30日）
-                )
+                )['info']['child_order_acceptance_id']
+                order_ids.append(order_id)
             except Exception as e:
-                print('opt entry limit order failed! ' + str(e))
-                LogMaster.add_log('opt entry limit order failed! ' + str(e), 0, None)
-                LineNotification.send_error('opt entry limit order failed! ' + str(e))
+                print('price tracing order failed! ' + str(e))
+                LogMaster.add_log('price tracing order failed! ' + str(e), 0, None)
+                LineNotification.send_error('price tracing order failed! ' + str(e))
                 cls.check_exception(e)
-                return -1, 0, 0, ''
-            while __check_bid_ask_diff(side, entry_price, 300):
-                pass
+                ave_p = round(sum(exec_price[i] * exec_size[i] for i in range(len(exec_price))) / sum(exec_size))
+                return -1, round(sum(exec_size), 2), ave_p, order_id
+            while __check_bid_ask_diff(side, entry_price, 300) and sum(exec_size) < total_size:
+                es, ep = __check_execution_ws(order_id)
+                if sum(es) > 0:
+                    exec_size.extend(es)
+                    exec_price.extend(ep)
+                time.sleep(0.1)
+            cls.cancel_order(order_id)
+        ave_p = round(sum(exec_price[i] * exec_size[i] for i in range(len(exec_price))) / sum(exec_size))
+        print('price tracing order has been successfully executed.' + 'side=' + side + ', ave price=' + str(ave_p) + ', size=' + str(round(sum(exec_size), 2)))
+        return 0, round(sum(exec_size), 2), ave_p, order_id
+
+
 
 
 
@@ -974,7 +1000,12 @@ if __name__ == '__main__':
     LogMaster.initialize()
     Trade.initialize()
     s = time.time()
-    print(Trade.opt_entry_limit_order('buy', 0.05))
+    oid = Trade.order('buy', 1000000,0.01, 'limit',1)
+    print(Trade.get_orders())
+    Trade.cancel_order(oid)
+    time.sleep(1)
+    Trade.cancel_order(oid)
+    #print(Trade.price_tracing_order('sell', 0.05))
     print('done')
     #executions =Trade.get_executions()
     ##print(executions)

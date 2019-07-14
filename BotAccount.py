@@ -41,10 +41,20 @@ class BotAccount:
         self.num_win = 0
         self.win_rate = 0
 
+        self.start_ut = time.time()
+
 
     def initialize_order(self):
         self.executions_hist_log = []
         self.active_order_ids = []
+
+    def initialize_pt_order(self):
+        self.pt_order_id = ''
+        self.pt_side = ''
+        self.pt_checked_exec_id = []
+        self.pt_outstanding_size = 0
+        self.pt_total_size = 0
+        self.pt_price = 0
 
 
     def initialize_holding(self):
@@ -54,8 +64,7 @@ class BotAccount:
         self.holding_dt = ''
         self.holding_ut = 0
 
-
-    def __update_holding(self, side, price, size, id):
+    def __update_holding(self, side, price, size):
         self.holding_dt = datetime.now()
         self.holding_ut = time.time()
         if self.holding_side == '':
@@ -65,7 +74,7 @@ class BotAccount:
         elif self.holding_side == side:
             self.holding_price = (self.holding_price * self.holding_size + price * size) / (self.holding_size + size)
             self.holding_size += round(size,2)
-        elif self.holding_side != side and self.holding_size == size:
+        elif self.holding_side != side and abs(self.holding_size - size) < 0.0001:
             self.initialize_holding()
         elif self.holding_side != side and self.holding_size > size:
             self.holding_size -= round(size,2)
@@ -77,6 +86,18 @@ class BotAccount:
     def add_order(self, order_id):
         self.active_order_ids.append(order_id)
 
+    def set_pt_order(self, order_id, side ,total_size, price):
+        self.initialize_pt_order()
+        self.pt_order_id = order_id
+        self.pt_side = side
+        self.pt_total_size = total_size
+        self.pt_price = price
+        self.pt_outstanding_size = total_size
+
+    '''
+    Tradeからside, size, priceを貰えば、holding, pl自炊できるのでは?
+    ->holdingは可能。plは、一回のtradeで全て同じsideであることが担保されていれば可能。
+    '''
     def check_order_execution(self):
         executions = Trade.get_executions()
         for i in range(len(executions)):
@@ -90,25 +111,57 @@ class BotAccount:
                     self.update_holding(side, price, size)
                     self.active_order_ids.pop(j)
 
+    '''
+    通常はwsでチェックして、ohlc_updateの前にAPI経由のexecutionデータでかくにんする。
+    '''
+    def check_pt_order_exeution(self):
+        executions = None
+        if datetime.now().second >=57:
+            executions = Trade.get_executions()
+        else:
+            executions = TickData.get_exe_data()[-30:]
+        if self.pt_order_id != '':
+            for i in range(len(executions)):
+                if executions[i]['child_order_acceptance_id'] == self.pt_order_id and executions[i]['id'] not in self.pt_checked_exec_id:
+                    side = executions[i]['side'].ilower()
+                    price = executions[i]['price']
+                    size = executions[i]['size']
+                    self.pt_checked_exec_id.append(executions[i]['id'])
+                    self.executions_hist_log.append(executions[i])
+                    self.calc_pl(executions[i])
+                    self.update_holding(side, price, size)
+                    self.pt_outstanding_size -= size
+                    if self.pt_outstanding_size <= 0:
+                        print('pt order has been fully executed!')
+                        self.initialize_pt_order()
 
-    '''
-    [{'id': 1146943205, 'side': 'SELL', 'price': 1256500.0, 'size': 3.0, 'exec_date': '2019-07-07T08:39:51.52', 
-    'child_order_id': 'JFX20190707-083908-462964F', 'commission': 0.0, 'child_order_acceptance_id': 'JRF20190707-083908-190050'}, 
-    '''
-    def calc_pl(self, execution):
-        side = execution['side'].ilower()
-        price = execution['price']
-        size = execution['size']
+
+    def calc_pl(self, side, size, price):
         if side != self.holding_side and self.holding_side != '':
-            self.realized_pl += (price - self.holding_price) * size if side =='buy' else (self.holding_price - price) * size
+            pl = (price - self.holding_price) * size if side =='buy' else (self.holding_price - price) * size
+            self.realized_pl += pl
             self.realized_pl = int(self.realized_pl)
+            self.num_trade += 1
+            if pl > 0:
+                self.num_win += 1
         self.__calc_holding_pnl()
+        self.total_pl = self.realized_pl + self.open_pnl
+        self.total_pl_log.append(self.total_pl)
+        self.__calc_win_rate()
+        self.__calc_pl_per_min()
 
     def __calc_holding_pnl(self):
         if self.holding_side != '':
-            self.open_pnl = (TickData.get_ltp() - self.holding_price) * self.holding_size if self.holding_side == 'buy' else
-            (self.holding_price - TickData.get_ltp()) * self.holding_size
+            self.open_pnl = (TickData.get_ltp() - self.holding_price) * self.holding_size if self.holding_side == 'buy' else (self.holding_price - TickData.get_ltp()) * self.holding_size
             self.open_pnl = int(self.open_pnl)
+
+    def __calc_win_rate(self):
+        if self.num_win > 0:
+            self.win_rate = round(float(self.num_win) / float(self.num_trade,4)
+
+    def __calc_pl_per_min(self):
+        self.total_pl_per_min = int(self.total_pl / (time.time() -  self.start_ut) / 60.0)
+
 
     def add_order_exec_price_gap(self, exe_price, ltp, side):
         gap = ltp - exe_price if side =='buy' else exe_price - ltp
