@@ -721,11 +721,11 @@ class Trade:
         if sum(exec_size) >0:
             ave_p = round(sum(exec_price[i] * exec_size[i] for i in range(len(exec_price))) / sum(exec_size))
             print('opt entry limit order has been successfully executed.' + 'side=' + side + ', ave price=' + str(ave_p) + ', size=' + str(round(sum(exec_size), 2)))
-            return round(sum(exec_size), 2), ave_p, order_id
+            return 0, round(sum(exec_size), 2), ave_p, order_id
         else:
             ave_p = 0
             print('opt entry limit order timed out.' + 'side=' + side + ', ave price=0'+', size=0')
-            return 0, 0, 0, order_id
+            return -1, 0, 0, order_id
 
 
     '''

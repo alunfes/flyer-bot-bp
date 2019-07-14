@@ -1,7 +1,7 @@
 from Trade import Trade
 from WebsocketMaster import TickData
 import datetime
-
+import time
 
 '''
 Account側：
@@ -18,6 +18,8 @@ class BotAccount:
     def __init__(self):
         self.initialize_order()
         self.initialize_holding()
+        self.initialize_pt_order()
+
         self.user_positions_dt = []
         self.user_orders_id = []
 
@@ -150,18 +152,17 @@ class BotAccount:
         self.__calc_win_rate()
         self.__calc_pl_per_min()
 
-    def __calc_holding_pnl(self):
+    def calc_holding_pnl(self):
         if self.holding_side != '':
             self.open_pnl = (TickData.get_ltp() - self.holding_price) * self.holding_size if self.holding_side == 'buy' else (self.holding_price - TickData.get_ltp()) * self.holding_size
             self.open_pnl = int(self.open_pnl)
 
     def __calc_win_rate(self):
         if self.num_win > 0:
-            self.win_rate = round(float(self.num_win) / float(self.num_trade,4)
+            self.win_rate = round(float(self.num_win) / float(self.num_trade,4))
 
     def __calc_pl_per_min(self):
-        self.total_pl_per_min = int(self.total_pl / (time.time() -  self.start_ut) / 60.0)
-
+        self.total_pl_per_min = int(self.total_pl / ((time.time() -  self.start_ut) / 60.0))
 
     def add_order_exec_price_gap(self, exe_price, ltp, side):
         gap = ltp - exe_price if side =='buy' else exe_price - ltp

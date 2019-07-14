@@ -51,7 +51,7 @@ class FlyerBot:
 
     def entry_limit_order(self, side, size):
             ltp = TickData.get_ltp()
-            res, size, price, order_id = Trade.opt_entry_limit_order(side, size)
+            res, size, price, order_id = Trade.opt_entry_limit_order(side, size) #round(sum(exec_size), 2), ave_p, order_id
             if res == 0:
                 print(side+' entry limit order has been executed.'+'price='+str(price)+', size='+str(size))
                 self.ac.update_holding(side,price,size,order_id)
@@ -108,7 +108,7 @@ class FlyerBot:
         while SystemFlg.get_system_flg():
             self.__check_system_maintenance(num_term, window_term)
             self.__update_ohlc()
-            if self.ac.holding_side == '' and self.ac.order_side == '': #no position no order
+            if self.ac.holding_side == '' and self.ac.pt_side == '': #no position no pt order
                 if self.prediction == 1 or self.prediction == -1:
                     self.entry_limit_order(self.pred_side, self.fixed_order_size)
             elif self.ac.holding_side != '' and self.ac.pt_side == '': #holding position and no order
@@ -117,7 +117,10 @@ class FlyerBot:
                 self.cancel_pt_order()
                 self.exit_order()
                 self.entry_limit_order(self.pred_side, self.fixed_order_size)
-
+            elif self.ac.holding_side == '' and self.ac.pt_side != '': #unexpected situation, no holding position but pt order exist
+                LogMaster.add_log('no position but pt order exist!',self.prediction, self.ac)
+                LineNotification.send_error('no position but pt order exist!')
+                self.cancel_pt_order()
             if Trade.flg_api_limit:
                 time.sleep(60)
                 print('Bot sleeping for 60sec due to API access limitation')
@@ -203,6 +206,8 @@ class FlyerBot:
                 TickData.ws_down_flg = False
                 self.__overwrite_one_min_data(self.num_term, self.window_term)
                 LogMaster.add_log('overwrite one min data', self.prediction, self.ac)
+                print('overwrite one min data')
+                LineNotification.send_error('overwrite one min data')
             if flg == False:
                 self.last_ohlc_min = datetime.now(self.JST).minute
                 OneMinMarketData.update_for_bot()
@@ -212,7 +217,7 @@ class FlyerBot:
                 print('prediction=',self.prediction)
                 self.pred_side = {0: 'no', 1: 'buy', -1: 'sell'}[self.prediction]
             #self.ac.sync_position_order()
-            self.ac.calc_pl(TickData.get_ltp())
+            self.ac.calc_holding_pnl()
             print('dt={}, open={},high={},low={},close={}'.format(OneMinMarketData.ohlc.dt[-1],
                                                                   OneMinMarketData.ohlc.open[-1],
                                                                   OneMinMarketData.ohlc.high[-1],
@@ -223,6 +228,8 @@ class FlyerBot:
             print('private access per 300sec={}'.format(Trade.total_access_per_300s))
             LogMaster.add_log('private access per 300sec = '+str(Trade.total_access_per_300s), self.prediction, self.ac)
             LineNotification.send_notification(LogMaster.get_latest_performance())
+            while datetime.now().second >= 59:
+                time.sleep(0.1)
 
 
 
@@ -233,6 +240,6 @@ if __name__ == '__main__':
     LogMaster.initialize()
     Trade.initialize()
     fb = FlyerBot()
-    fb.start_flyer_bot(50,10,6000,1000,0.7,0.4) #num_term, window_term, pl, ls, upper_kijun, lower_kijun)
+    fb.start_flyer_bot(50,10,5000,1000,0.7,0.4) #num_term, window_term, pl, ls, upper_kijun, lower_kijun)
     #'JRF20190526-142616-930215'
     #JRF20190526-143431-187560
