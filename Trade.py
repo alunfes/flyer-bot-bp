@@ -707,7 +707,7 @@ class Trade:
         exec_size = []
         exec_price = []
         print('oid=',order_id)
-        while datetime.now().second <50 and sum(exec_size) < total_size:
+        while datetime.now().second <=56 and sum(exec_size) < total_size:
             es, ep = __check_execution_ws(order_id)
             exec_size.extend(es)
             exec_price.extend(ep)

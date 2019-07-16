@@ -66,6 +66,7 @@ class WebsocketMaster:
                 self.disconnect()
         except Exception as e:
             print('websocket - '+str(e))
+            TickData.ws_down_flg  =True
         time.sleep(3)
         self.connect()
 

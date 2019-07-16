@@ -33,6 +33,7 @@ class FlyerBot:
         self.ls = 0
         self.prediction = 0
         self.pred_side = ''
+        self.flg_loss_cut = False #prohibit re-entry after losscut within 1m
 
     #cancellation shoud be used only for pt order
     def cancel_pt_order(self):
@@ -43,10 +44,10 @@ class FlyerBot:
                 print('pt cancel failed, partially executed')
                 oid = Trade.order(status['side'].lower(),0,status['executed_size'],'market',1)
                 LogMaster.add_log('action_message - cancel pt order - cancel pt failed and partially executed. closed position.',self.prediction, self.ac)
-                self.ac.initialize_order()
+                self.ac.initialize_pt_order()
             else:
                 LogMaster.add_log('action_message - cancelled order',self.prediction, self.ac)
-                self.ac.initialize_order()
+                self.ac.initialize_pt_order()
 
 
     def entry_limit_order(self, side, size):
@@ -54,7 +55,7 @@ class FlyerBot:
             res, size, price, order_id = Trade.opt_entry_limit_order(side, size) #round(sum(exec_size), 2), ave_p, order_id
             if res == 0:
                 print(side+' entry limit order has been executed.'+'price='+str(price)+', size='+str(size))
-                self.ac.update_holding(side,price,size,order_id)
+                self.ac.update_holding(side,price,size)
                 #self.ac.calc_pl(side, size, price)
                 self.ac.add_order_exec_price_gap(price,ltp,side)
                 print('holding_side={},holding_price={},holding_size={},total_pl={},collateral={},collateral_change={},realized_pl={}'.
@@ -62,9 +63,23 @@ class FlyerBot:
                 LogMaster.add_log('Limit order entry has been executed. ' + ' side=' + side + ' size=' + str(size)+ ' price=' + str(price), self.prediction,self.ac)
             else:
                 LogMaster.add_log('Limit order has been failed.'+' side='+side +' '+str(size),self.prediction, self.ac)
-                print('market order failed!')
-            self.ac.initialize_order()
+                print('entry limit order failed!')
 
+    def entry_price_tracing_order(self, side, size):
+        ltp = TickData.get_ltp()
+        res, size, price, order_id = Trade.price_tracing_order(side,size)  # round(sum(exec_size), 2), ave_p, order_id
+        if res == 0:
+            print(side + ' entry price tracing order has been executed.' + 'price=' + str(price) + ', size=' + str(size))
+            self.ac.update_holding(side, price, size)
+            self.ac.add_order_exec_price_gap(price, ltp, side)
+            print('holding_side={},holding_price={},holding_size={},total_pl={},collateral={},collateral_change={},realized_pl={}'.
+                format(self.ac.holding_side, self.ac.holding_price, self.ac.holding_size, self.ac.total_pl,
+                       self.ac.collateral, self.ac.collateral_change, self.ac.realized_pl))
+            LogMaster.add_log('Price tracing order entry has been executed. ' + ' side=' + side + ' size=' + str(size) + ' price=' + str(
+                    price), self.prediction, self.ac)
+        else:
+            LogMaster.add_log('Limit order has been failed.' + ' side=' + side + ' ' + str(size), self.prediction,self.ac)
+            print('etnry price tracing order failed!')
 
     def entry_pt_order(self):
         side = 'buy' if self.ac.holding_side == 'sell' else 'sell'
@@ -86,19 +101,35 @@ class FlyerBot:
             res, size, price, order_id = Trade.price_tracing_order(side, self.ac.holding_size) #return 0, round(sum(exec_size), 2), ave_p, order_id
             if res == 0:
                 print(side+' exit price tracing order has been executed.' + 'price=' + str(price) + ', size=' + str(size))
-                self.ac.update_holding(side, price, size, order_id)
+                self.ac.update_holding(side, price, size)
                 self.ac.calc_pl(side, size, price)
                 self.ac.add_order_exec_price_gap(price, ltp, side)
                 LogMaster.add_log('exit order completed!', self.prediction, self.ac)
                 return 0
             else:
                 print(side + ' exit price tracing order has been failed.' + 'price=' + str(price) + ', size=' + str(size))
-                self.ac.update_holding(side, price, size, order_id)
+                self.ac.update_holding(side, price, size)
                 self.ac.calc_pl(side, size, price)
                 self.ac.add_order_exec_price_gap(price, ltp, side)
                 LogMaster.add_log('exit order failed!', self.prediction, self.ac)
                 return -1
 
+    def check_and_do_lc(self):
+        if self.ac.holding_side != '':
+            if self.ac.holding_side == 'buy' and TickData.get_ltp() - self.ac.holding_price <= -self.ls:
+                print('hit loss cut kijun')
+                LogMaster.add_log('hit loss cut kijun',self.prediction, self.ac)
+                LineNotification.send_error('hit loss cut kijun')
+                self.flg_loss_cut = True
+                self.exit_order()
+                self.cancel_pt_order()
+            elif self.ac.holding_side == 'sell' and self.ac.holding_price - TickData.get_ltp() <= -self.ls:
+                print('hit loss cut kijun')
+                LogMaster.add_log('hit loss cut kijun',self.prediction, self.ac)
+                LineNotification.send_error('hit loss cut kijun')
+                self.flg_loss_cut = True
+                self.exit_order()
+                self.cancel_pt_order()
 
 
     def start_flyer_bot(self, num_term, window_term, pl, ls, upper_kijun, lower_kijun):
@@ -108,19 +139,23 @@ class FlyerBot:
         while SystemFlg.get_system_flg():
             self.__check_system_maintenance(num_term, window_term)
             self.__update_ohlc()
-            if self.ac.holding_side == '' and self.ac.pt_side == '': #no position no pt order
+            if self.ac.holding_side == '' and self.ac.pt_side == '' and self.flg_loss_cut == False: #no position no pt order
                 if self.prediction == 1 or self.prediction == -1:
-                    self.entry_limit_order(self.pred_side, self.fixed_order_size)
-            elif self.ac.holding_side != '' and self.ac.pt_side == '': #holding position and no order
+                    #self.entry_limit_order(self.pred_side, self.fixed_order_size)
+                    self.entry_price_tracing_order(self.pred_side, self.fixed_order_size)
+            elif self.ac.holding_side != '' and self.ac.pt_side == '' and self.flg_loss_cut == False: #holding position and no order
                 self.entry_pt_order()
-            elif (self.ac.holding_side == 'buy' and (self.prediction == 2)) or (self.ac.holding_side == 'sell' and (self.prediction[0] == 1)):  # ポジションが判定と逆の時にexit,　もしplがあればキャンセル。。
+            elif (self.ac.holding_side == 'buy' and self.prediction == 2) or (self.ac.holding_side == 'sell' and self.prediction == 1):  # ポジションが判定と逆の時にexit,　もしplがあればキャンセル。。
                 self.cancel_pt_order()
                 self.exit_order()
-                self.entry_limit_order(self.pred_side, self.fixed_order_size)
+                self.entry_price_tracing_order(self.pred_side, self.fixed_order_size)
+                #self.entry_limit_order(self.pred_side, self.fixed_order_size)
             elif self.ac.holding_side == '' and self.ac.pt_side != '': #unexpected situation, no holding position but pt order exist
+                print('no position but pt order exist!')
                 LogMaster.add_log('no position but pt order exist!',self.prediction, self.ac)
                 LineNotification.send_error('no position but pt order exist!')
                 self.cancel_pt_order()
+            self.check_and_do_lc() #check and do loss cut
             if Trade.flg_api_limit:
                 time.sleep(60)
                 print('Bot sleeping for 60sec due to API access limitation')
@@ -172,6 +207,7 @@ class FlyerBot:
     def __update_ohlc(self): #should download ohlc soon after when it finalized
         if self.last_ohlc_min < datetime.now(self.JST).minute or (self.last_ohlc_min == 59 and datetime.now(self.JST).minute == 0):
             flg = True
+            self.flg_loss_cut = False
             num_conti = 0
             num_max_trial = 10
             time.sleep(1)
@@ -240,6 +276,6 @@ if __name__ == '__main__':
     LogMaster.initialize()
     Trade.initialize()
     fb = FlyerBot()
-    fb.start_flyer_bot(50,10,5000,1000,0.7,0.4) #num_term, window_term, pl, ls, upper_kijun, lower_kijun)
+    fb.start_flyer_bot(50,10,6000,1000,0.3,0.01) #num_term, window_term, pl, ls, upper_kijun, lower_kijun)
     #'JRF20190526-142616-930215'
     #JRF20190526-143431-187560
