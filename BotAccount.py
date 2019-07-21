@@ -3,43 +3,65 @@ from WebsocketMaster import TickData
 from datetime import datetime
 from SystemFlg import SystemFlg
 import time
-
+import threading
 '''
 botから提供されたorder idを元に約定確認をし、holding, plを同時に計算する。
 order idとマッチしたexecution dataは削除。
-2分経過したexecution dataは削除。
+1分経過したexecution dataは削除。
+
+ptの約定確認：
+pt価格に到達したと判断できる時に、pt order idでAPI経由で約定確認する。
 
 '''
 
 
-class execution_checking_data():
+class ExecutionCheckingData():
     def __init__(self):
-        self.execution_data = []
-        self.execution_ut = []
-        self.execution_checked = []
+        self.execution_data = {}
+        self.execution_ut = {}
         self.matched_execution_data = []
+        self.execution_id = 0
 
     def add_executions(self, executions):
-        if len(self.execution_data) > 0:
-            # check start ind
-            start_ind = 0
-            for i in range(len(executions)):
-                if self.execution_data[-1]['id'] == executions[len(executions) -i]:
-                    start_ind = len(executions) -i + 1
-            add_exec = executions[start_ind:]
-            self.execution_data.extend(add_exec)
-            self.execution_ut.extend([int(time.time()) for i in range(len(add_exec))])
-            self.execution_checked.extend([False for i in range(len(add_exec))])
-        else:
-            self.execution_data.extend(executions)
-            self.execution_ut.extend([int(time.time()) for i in range(len(executions))])
-            self.execution_checked.extend([False for i in range(len(executions))])
-
+        if executions != None and len(executions) > 0:
+            #check duplication of execution id
+            id_list = [x['id'] for x in list(self.execution_data.values())[:]]
+            for execution in executions:
+                if len(executions) > 0 and execution['id'] not in id_list:
+                    self.execution_data[self.execution_id] = execution
+                    self.execution_ut[self.execution_id] = time.time()
+                    self.execution_id += 1
 
     def remove_executions(self, ind):
         self.execution_data.pop(ind)
         self.execution_ut.pop(ind)
         self.execution_checked.pop(ind)
+
+
+class ActiveOrderData():
+    def __init__(self):
+        self.active_order_ids = {}
+        self.active_order_ut = {}
+        self.active_order_outstanding_size = {}
+        self.active_order_id = 0
+        self.all_order_ids = []
+
+    def add_active_order(self, order_id, size):
+        if order_id not in self.active_order_ids.values():
+            self.active_order_ids[self.active_order_id] = order_id
+            self.active_order_ut[self.active_order_id] = time.time()
+            self.active_order_outstanding_size[self.active_order_id] = size
+            self.active_order_ids.append(order_id)
+            self.active_order_id += 1
+
+    def add_active_orders(self, order_ids, order_sizes):
+        for i, order in enumerate(order_ids):
+            self.add_active_order(order, order_sizes[i])
+
+    def remove_active_order(self, key_ind):
+        del self.active_order_ids[key_ind]
+        del self.active_order_ut[key_ind]
+        del self.active_order_outstanding_size[key_ind]
 
 
 class BotAccount:
@@ -51,16 +73,16 @@ class BotAccount:
         self.user_positions_dt = []
         self.user_orders_id = []
 
-        self.initial_collateral = Trade.get_collateral()['collateral']
+        #self.initial_collateral = Trade.get_collateral()['collateral']
         self.collateral = 0
         self.open_pnl = 0
         self.realized_pl = 0
         self.total_pl = 0 #realized_pl + open pnl
         self.total_pl_log = []
         self.total_pl_per_min = 0
-        self.collateral_change = 0 #collateral - initial_collateral
-        self.collateral_change_per_min = 0
-        self.collateral_change_log = []
+        #self.collateral_change = 0 #collateral - initial_collateral
+        #self.collateral_change_per_min = 0
+        #self.collateral_change_log = []
         self.order_exec_price_gap = [0]
         self.num_trade = 0
         self.num_win = 0
@@ -72,10 +94,14 @@ class BotAccount:
         self.win_rate = 0
         self.start_ut = time.time()
 
-        self.exec_data = execution_checking_data()
+        self.exec_data = ExecutionCheckingData()
+        self.active_order_data = ActiveOrderData()
 
         self.before_posi_side = ''
         self.before_posi_size = 0
+
+        th = threading.Thread(target=self.account_thread)
+        th.start()
 
 
     def initialize_order(self):
@@ -107,39 +133,40 @@ class BotAccount:
     ・order idが登録sれてから一定時間が経過しても約定履歴・注文一覧に載ってこない場合にcancelとして取り扱う。
     '''
     def account_thread(self):
-        mid_check_flg = False #flg for 30秒ごとに一回API経由で約定履歴・注文一覧
+        mid_check_flg = False #flg for 約30秒ごとに一回API経由で約定履歴・注文一覧
         i = 0
         while SystemFlg.get_system_flg():
             if i > 10:
                 i = 0
                 #30秒ごとに一回API経由で約定履歴を取得して、order idを確認
-                executions = Trade.get_executions()
-                self.exec_data.add_executions(executions)
-
-
-            executions = TickData.get_exe_data()
-            self.exec_data.add_executions(executions)
-
+                self.exec_data.add_executions(Trade.get_executions())
+                #30秒ごとに一回API経由で注文一覧を取得して、order id登録から1分経過したものをcancelとして処理
+                self.check_order_cancellation()
+            self.exec_data.add_executions(TickData.get_latest_exec_data())
+            self.check_order_execution()
             i += 1
             time.sleep(3)
 
 
     def check_order_execution(self):
-        for i in range(len(self.exec_data.execution_data)):
-            for j in range(len(self.active_order_ids)):
-                if self.exec_data.execution_checked[i] == False:
-                    if self.exec_data.execution_data[i]['buy_child_order_acceptance_id'] == self.active_order_ids[j] or self.exec_data.execution_data[i]['sell_child_order_acceptance_id'] == self.active_order_ids[j]:
-                        self.active_order_outstanding_size[j] -=self.exec_data.execution_data[i]['size']
-                        self.exec_data.execution_checked[i] = True
-                        self.executions_hist_log.append(self.exec_data.execution_data[i])
-                        self.calc_pl(self.exec_data.execution_data[i])
-                        self.update_holding(self.exec_data.execution_data[i]['side'].lower(), self.exec_data.execution_data[i]['price'], self.exec_data.execution_data[i]['size'])
-        #remove checked executions
-        target_index = [i for i, x in enumerate(self.exec_data.execution_checked) if x == True]
-        
+        for exec_key in list(self.exec_data.execution_data.keys())[:]:
+            for order_key in list(self.active_order_data.active_order_ids.keys())[:]:
+                if self.exec_data.execution_data[exec_key]['buy_child_order_acceptance_id'] == self.active_order_ids[order_key] or \
+                        self.exec_data.execution_data[exec_key]['sell_child_order_acceptance_id'] == self.active_order_ids[order_key]:
+                    self.active_order_data.active_order_outstanding_size[order_key] -=self.exec_data.execution_data[exec_key]['size']
+                    if self.active_order_data.active_order_outstanding_size[order_key] < 0.001:
+                        self.active_order_data.remove_active_order(order_key)
+                    self.exec_data.matched_execution_data.append(self.exec_data.execution_data[exec_key])
+                    self.calc_pl(self.exec_data.execution_data[exec_key])
+                    self.update_holding(self.exec_data.execution_data[exec_key]['side'].lower(), self.exec_data.execution_data[exec_key]['price'], self.exec_data.execution_data[exec_key]['size'])
+                    self.exec_data.remove_executions(exec_key)
 
-        #remove active orders
-
+    def check_order_cancellation(self):
+        orders = Trade.get_orders()
+        id_list = [x['info']['child_order_acceptance_id'] for x in orders]
+        for key, active_id in enumerate(self.active_order_data.active_order_ids):
+            if active_id not in id_list and time.time() - self.active_order_data.ut[key] >= 60:
+                self.active_order_data.remove_active_order(key)
 
 
     def update_holding(self, side, price, size):
@@ -204,10 +231,10 @@ class BotAccount:
 
 
     def add_order(self, order_id, size):
-        self.active_order_ids.append(order_id)
-        self.active_order_ut.append(time.time())
-        self.all_order_ids.append(order_id)
-        self.active_order_outstanding_size.append(size)
+        self.active_order_data.add_active_order(order_id, size)
+
+    def add_orders(self,order_ids, order_sizes):
+        self.active_order_data.add_active_orders(order_ids, order_sizes)
 
     def set_pt_order(self, order_id, side ,total_size, price):
         self.initialize_pt_order()

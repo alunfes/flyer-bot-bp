@@ -51,6 +51,7 @@ class WebsocketMaster:
             if self.message is not None:
                 self.exection = self.message
                 TickData.add_exec_data(self.exection)
+                TickData.add_exec_latest_data(self.exection)
         elif self.channel == 'lightning_ticker_' and self.symbol =='FX_BTC_JPY':
             if self.message is not None:
                 self.ticker = self.message
@@ -94,12 +95,14 @@ class TickData:
     @classmethod
     def initialize(cls):
         cls.exec_lock = threading.Lock()
+        cls.exec_latest_lock = threading.Lock()
         cls.ticker_lock = threading.Lock()
         cls.ohlc_lock = threading.Lock()
         cls.btc_lock = threading.Lock()
         cls.ws_down_flg = False
         cls.ltp = []
         cls.exec_data = []
+        cls.exec_latest_data = []
         cls.ticker_data = []
         cls.btc_data = []
         cls.std_1m = 0
@@ -159,6 +162,13 @@ class TickData:
     @classmethod
     def get_exe_data(cls):
         return cls.exec_data[:]
+
+    @classmethod
+    def get_latest_exec_data(cls):
+        with cls.exec_latest_lock:
+            data = cls.exec_latest_data[:]
+            cls.exec_latest_data = []
+            return data
 
     @classmethod
     def get_exec_ws_status(cls):
@@ -248,6 +258,12 @@ class TickData:
                     del cls.exec_data[:-10000]
             with cls.ohlc_lock:
                 cls.__calc_ohlc()
+
+    @classmethod
+    def add_exec_latest_data(cls,exec):
+        if len(exec) > 0:
+            with cls.exec_latest_lock:
+                cls.exec_latest_data.extend(exec)
 
     @classmethod
     def add_btc_data(cls, message):

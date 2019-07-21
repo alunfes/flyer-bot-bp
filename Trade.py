@@ -756,7 +756,9 @@ class Trade:
         exec_size = []
         exec_price = []
         order_ids = []
-        while sum(exec_size) < total_size:
+        order_sizes = []
+        outstanding_size = total_size
+        while sum(exec_size) < total_size and outstanding_size >= 0.01:
             try:
                 entry_price = TickData.get_bid_price() + 1 if side == 'buy' else TickData.get_ask_price() - 1
                 cls.num_private_access += 1
@@ -765,28 +767,29 @@ class Trade:
                     type='limit',
                     side=side,
                     price=entry_price,
-                    amount=total_size,
+                    amount=outstanding_size,
                     params={'product_code': 'FX_BTC_JPY', 'minute_to_expire': 1}  # 期限切れまでの時間（分）（省略した場合は30日）
                 )['info']['child_order_acceptance_id']
                 order_ids.append(order_id)
+                order_sizes.append(outstanding_size)
             except Exception as e:
                 print('price tracing order failed! ' + str(e))
                 LogMaster.add_log('price tracing order failed! ' + str(e), 0, None)
                 LineNotification.send_error('price tracing order failed! ' + str(e))
                 cls.check_exception(e)
                 ave_p = round(sum(exec_price[i] * exec_size[i] for i in range(len(exec_price))) / sum(exec_size))
-                return -1, round(sum(exec_size), 2), ave_p, order_id
+                return -1, order_sizes, ave_p, order_ids, sum(exec_size)
             while __check_bid_ask_diff(side, entry_price, 300) and sum(exec_size) < total_size:
                 es, ep = __check_execution_ws(order_id)
                 if sum(es) > 0:
                     exec_size.extend(es)
                     exec_price.extend(ep)
+                    outstanding_size = round(total_size - sum(exec_size),2)
                 time.sleep(0.1)
             cls.cancel_order(order_id)
         ave_p = round(sum(exec_price[i] * exec_size[i] for i in range(len(exec_price))) / sum(exec_size))
         print('price tracing order has been successfully executed.' + 'side=' + side + ', ave price=' + str(ave_p) + ', size=' + str(round(sum(exec_size), 2)))
-        return 0, round(sum(exec_size), 2), ave_p, order_id
-
+        return 0, order_sizes, ave_p, order_ids, sum(exec_size)
 
 
 
